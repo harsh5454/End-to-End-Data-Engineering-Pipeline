@@ -1,0 +1,91 @@
+version: "3.8"
+
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.9.2
+  env_file:
+    - .env
+  environment:
+    &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    _PIP_ADDITIONAL_REQUIREMENTS: "-r /requirements.txt"
+  volumes:
+    - ../dags:/opt/airflow/dags
+    - ../logs:/opt/airflow/logs
+    - ../plugins:/opt/airflow/plugins
+    - ../requirements.txt:/requirements.txt
+    - ../data:/opt/airflow/data
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      retries: 5
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_DATABASE: etl
+      MYSQL_USER: airflow
+      MYSQL_PASSWORD: airflow
+      MYSQL_ROOT_PASSWORD: airflow
+    ports:
+      - "3307:3306"   # host 3307 -> container 3306
+    healthcheck:
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      interval: 5s
+      retries: 10
+    volumes:
+      - mysqldata:/var/lib/mysql
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command: -c "pip install -r /requirements.txt && airflow db init && airflow users create --role Admin --username ${AIRFLOW_USER:-admin} --password ${AIRFLOW_PASSWORD:-admin} --firstname Harsh --lastname Bhoir --email harsh@example.com || true"
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+    ports:
+      - "8793:8793"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:
+  mysqldata:
+
+networks:
+  default:
+    external:
+      name: airflow_network
+
+secrets:
+  postgres_password:
+    external: true
+  mysql_root_password:
+    external: true
+  airflow_password:
+    external: true
